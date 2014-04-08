@@ -26,8 +26,6 @@ import os
 import copy
 import time
 import pprint
-import xmlrpclib
-from lxml import etree
 import logging
 
 # Import salt cloud libs
@@ -40,6 +38,14 @@ from salt.cloud.exceptions import (
     SaltCloudExecutionFailure,
     SaltCloudExecutionTimeout
 )
+
+# Attempt to import xmlrpclib and lxml
+try:
+    import xmlrpclib
+    from lxml import etree
+    HAS_XMLLIBS = True
+except ImportError:
+    HAS_XMLLIBS = False
 
 # Get logging started
 log = logging.getLogger(__name__)
@@ -62,11 +68,29 @@ def _xmltodict(xml):
     return dicts
 
 
+def _get_xml_rpc():
+    xml_rpc = config.get_cloud_config_value(
+        'xml_rpc', get_configured_provider(), __opts__
+    )
+    user = config.get_cloud_config_value(
+        'user', get_configured_provider(), __opts__
+    )
+    password = config.get_cloud_config_value(
+        'password', get_configured_provider(), __opts__
+    )
+    server = xmlrpclib.ServerProxy(xml_rpc)
+
+    return server, user, password
+
+
 # Only load in this module if the OpenNebula configurations are in place
 def __virtual__():
     '''
     Check for OpenNebula configurations
     '''
+    if not HAS_XMLLIBS:
+        return False
+
     if get_configured_provider() is False:
         return False
 
@@ -95,11 +119,7 @@ def avail_locations(call=None):
             '-f or --function, or with the --list-locations option'
         )
 
-    xml_rpc = config.get_cloud_config_value('xml_rpc', get_configured_provider(), __opts__)
-    user = config.get_cloud_config_value('user', get_configured_provider(), __opts__)
-    password = config.get_cloud_config_value('password', get_configured_provider(), __opts__)
-
-    server = xmlrpclib.ServerProxy(xml_rpc)
+    server, user, password = _get_xml_rpc()
     hostpool = server.one.hostpool.info(user+':'+password)[1]
 
     locations = {}
@@ -119,11 +139,7 @@ def avail_images(call=None):
             '-f or --function, or with the --list-images option'
         )
 
-    xml_rpc = config.get_cloud_config_value('xml_rpc', get_configured_provider(), __opts__)
-    user = config.get_cloud_config_value('user', get_configured_provider(), __opts__)
-    password = config.get_cloud_config_value('password', get_configured_provider(), __opts__)
-
-    server = xmlrpclib.ServerProxy(xml_rpc)
+    server, user, password = _get_xml_rpc()
     templatepool = server.one.templatepool.info(user+':'+password, -1, -1, -1)[1]
 
     templates = {}
@@ -156,20 +172,20 @@ def list_nodes(call=None):
             'The list_nodes function must be called with -f or --function.'
         )
 
-    xml_rpc = config.get_cloud_config_value('xml_rpc', get_configured_provider(), __opts__)
-    user = config.get_cloud_config_value('user', get_configured_provider(), __opts__)
-    password = config.get_cloud_config_value('password', get_configured_provider(), __opts__)
-
-    server = xmlrpclib.ServerProxy(xml_rpc)
+    server, user, password = _get_xml_rpc()
     vmpool = server.one.vmpool.info(user+':'+password, -1, -1, -1, -1)[1]
 
     vms = {}
     for vm in etree.XML(vmpool):
         vms[vm.find('NAME').text] = {}
         vms[vm.find('NAME').text]['id'] = vm.find('ID').text
-        image = 'template_id {0}'.format(vm.find('TEMPLATE').find('TEMPLATE_ID').text)
+        image = 'template_id {0}'.format(
+            vm.find('TEMPLATE').find('TEMPLATE_ID').text
+        )
         vms[vm.find('NAME').text]['image'] = image
-        size = 'cpu {0}, memory {1}'.format(vm.find('TEMPLATE').find('CPU').text,vm.find('TEMPLATE').find('MEMORY').text)
+        size = 'cpu {0}, memory {1}'.format(
+            vm.find('TEMPLATE').find('CPU').text,vm.find('TEMPLATE').find('MEMORY').text
+        )
         vms[vm.find('NAME').text]['size'] = size
         vms[vm.find('NAME').text]['state'] = vm.find('STATE').text
         private_ips = []
@@ -190,20 +206,20 @@ def list_nodes_full(call=None):
             'The list_nodes_full function must be called with -f or --function.'
         )
 
-    xml_rpc = config.get_cloud_config_value('xml_rpc', get_configured_provider(), __opts__)
-    user = config.get_cloud_config_value('user', get_configured_provider(), __opts__)
-    password = config.get_cloud_config_value('password', get_configured_provider(), __opts__)
-
-    server = xmlrpclib.ServerProxy(xml_rpc)
+    server, user, password = _get_xml_rpc()
     vmpool = server.one.vmpool.info(user+':'+password, -1, -1, -1, -1)[1]
 
     vms = {}
     for vm in etree.XML(vmpool):
         vms[vm.find('NAME').text] = _xmltodict(vm)
         vms[vm.find('NAME').text]['id'] = vm.find('ID').text
-        image = 'template_id {0}'.format(vm.find('TEMPLATE').find('TEMPLATE_ID').text)
+        image = 'template_id {0}'.format(
+            vm.find('TEMPLATE').find('TEMPLATE_ID').text
+        )
         vms[vm.find('NAME').text]['image'] = image
-        size = 'cpu {0}, memory {1}'.format(vm.find('TEMPLATE').find('CPU').text,vm.find('TEMPLATE').find('MEMORY').text)
+        size = 'cpu {0}, memory {1}'.format(
+            vm.find('TEMPLATE').find('CPU').text,vm.find('TEMPLATE').find('MEMORY').text
+        )
         vms[vm.find('NAME').text]['size'] = size
         vms[vm.find('NAME').text]['state'] = vm.find('STATE').text
         private_ips = []
@@ -312,14 +328,11 @@ def create(vm_):
         {'kwargs': kwargs},
     )
 
-    xml_rpc = config.get_cloud_config_value('xml_rpc', get_configured_provider(), __opts__)
-    user = config.get_cloud_config_value('user', get_configured_provider(), __opts__)
-    password = config.get_cloud_config_value('password', get_configured_provider(), __opts__)
     region = ''
     if kwargs['region_id'] != None:
         region = 'SCHED_REQUIREMENTS="ID={0}"'.format(kwargs['region_id'])
     try:
-        server = xmlrpclib.ServerProxy(xml_rpc)
+        server, user, password = _get_xml_rpc()
         ret = server.one.template.instantiate(user+':'+password, int(kwargs['image_id']), kwargs['name'], False, region)[1]
     except Exception as exc:
         log.error(
@@ -508,7 +521,7 @@ def script(vm_):
 
 def show_instance(name, call=None):
     '''
-    Show the details from Digital Ocean concerning a droplet
+    Show the details from OpenNebula concerning a VM
     '''
     if call != 'action':
         raise SaltCloudSystemExit(
@@ -557,11 +570,7 @@ def destroy(name, call=None):
         {'name': name},
     )
 
-    xml_rpc = config.get_cloud_config_value('xml_rpc', get_configured_provider(), __opts__)
-    user = config.get_cloud_config_value('user', get_configured_provider(), __opts__)
-    password = config.get_cloud_config_value('password', get_configured_provider(), __opts__)
-
-    server = xmlrpclib.ServerProxy(xml_rpc)
+    server, user, password = _get_xml_rpc()
 
     data = show_instance(name, call='action')
     node = server.one.vm.action(user+':'+password, 'delete', int(data['id']))[1]
